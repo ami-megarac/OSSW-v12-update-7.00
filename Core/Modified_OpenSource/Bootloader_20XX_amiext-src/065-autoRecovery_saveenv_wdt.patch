@@ -1,0 +1,82 @@
+diff -Naur uboot_orig/oem/ami/fmh/cmd_fmh.c uboot/oem/ami/fmh/cmd_fmh.c
+--- uboot_orig/oem/ami/fmh/cmd_fmh.c	2022-08-17 12:37:43.865393898 +0530
++++ uboot/oem/ami/fmh/cmd_fmh.c	2022-08-17 12:41:52.310497971 +0530
+@@ -11,7 +11,7 @@
+ #include <spi_flash.h>
+ #include <environment.h>
+ #include <console.h>
+-
++#include "soc_hw.h"
+ 
+ #ifdef CONFIG_SPX_FEATURE_SECURE_BOOT_SUPPORT 
+ # include "hrot_ifc.h"
+@@ -47,6 +47,7 @@
+ 
+ #define IMG1_index_val  0
+ #define IMG2_index_val  1
++#define WDT_CLR_EVT_COUNTER     0x76                    // Clear the Timeout Counter & Boot Source code
+ 
+ typedef struct
+ {
+@@ -975,9 +976,10 @@
+ #ifdef CONFIG_SPX_FEATURE_BMC_FIRMWARE_AUTO_RECOVERY
+ void BMCAutoRecovery (void)
+ {
+-    char *pStr;
++    char *pStr=NULL, *gsEnv=NULL, *gsEnv2=NULL;
+     char value[2] = {0};
+-    u8 force_recovery = 0, imgheadererr = 0, bootretry = 1, currentbootretry = 0;
++    u8 force_recovery = 0, imgheadererr = 0, bootretry = CONFIG_SPX_FEATURE_BMC_FIRMWARE_REBOOT_RETRY_COUNT, currentbootretry = 0;
++    unsigned long wdt2TimeoutStatus = 0;
+ 
+     /*Check whether force recovery image boot is triggered.*/
+     pStr= env_get("forcerecovery");
+@@ -1007,10 +1009,17 @@
+         currentbootretry = (int)simple_strtoul(pStr,NULL,0);
+     }
+ 
+-    currentbootretry++;
+-    sprintf(value,"%d",currentbootretry);
+-    env_set("currentbootretry",(char *)value);
+-    env_save();
++    wdt2TimeoutStatus = *((volatile unsigned long *)(WDT2_TIMEOUT_STAT_REG));
++    *((volatile unsigned long *)(WDT2_CLR_TIMEOUT_STAT_REG)) = WDT_CLR_EVT_COUNTER;
++    // Increment the currentbootretry, if reboot happens on watchdog.
++    if(wdt2TimeoutStatus)
++    {
++	currentbootretry++;
++	sprintf(value,"%d",currentbootretry);
++	env_set("currentbootretry",(char *)value);
++	env_save();
++	wdt2TimeoutStatus = 0;
++    }
+ 
+     if(force_recovery || imgheadererr || (currentbootretry > bootretry) )
+     {
+@@ -1037,6 +1046,8 @@
+     else
+     {
+         Enable_watchdog(&g_wdt_reset_status);
++
++	gsEnv = env_get("goldenside");
+         if (g_wdt_reset_status & 0x00000002)
+         {
+             env_set("goldenside", "1");
+@@ -1046,8 +1057,16 @@
+             env_set("goldenside", "0");
+         }
+ 
+-        env_save();
++	gsEnv2 = env_get("goldenside");
+ 
++	if((gsEnv == NULL) || (gsEnv2 == NULL))
++	{
++		env_save();
++	}
++	else if(strcmp(gsEnv,gsEnv2) != 0)
++	{        
++		env_save();
++	}
+     }
+ 
+ }

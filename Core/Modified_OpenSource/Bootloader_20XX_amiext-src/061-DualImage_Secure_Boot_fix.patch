@@ -1,0 +1,255 @@
+diff -Naur uboot_old/oem/ami/fmh/cmd_fmh.c uboot_new/oem/ami/fmh/cmd_fmh.c
+--- uboot_old/oem/ami/fmh/cmd_fmh.c	2022-08-08 15:55:41.000000000 +0530
++++ uboot_new/oem/ami/fmh/cmd_fmh.c	2022-08-08 15:55:28.000000000 +0530
+@@ -1102,9 +1102,8 @@
+ 	char *bootselect = NULL;
+ #endif
+ 
+-#if defined CONFIG_SPX_FEATURE_SECURE_BOOT_SUPPORT && defined CONFIG_SPX_FEATURE_CONTIGIOUS_SPI_MEMORY
+-	unsigned long offset=0;
+-	int image=0;
++#if defined CONFIG_SPX_FEATURE_SECURE_BOOT_SUPPORT && ( defined CONFIG_SPX_FEATURE_DEDICATED_SPI_FLASH_BANK || defined CONFIG_SPX_FEATURE_CONTIGIOUS_SPI_MEMORY )
++	int image = 0; // variable to store the image to be used for boot
+ #endif
+ 
+ 	sprintf(baudrate_str,"%d", CONFIG_SPX_FEATURE_BAUDRATE_CONSOLE_TTY);
+@@ -1222,13 +1221,19 @@
+ 			i++;
+ 			continue;
+ 		}
+-
+ 		/* Extract Module information and module name */
+ 		mod = &(fmh->Module_Info);
+-	
+ #ifdef CONFIG_SPX_FEATURE_SECURE_BOOT_SUPPORT
+-		#ifdef CONFIG_SPX_FEATURE_CONTIGIOUS_SPI_MEMORY
+-			retval = hrot_update(mod->Module_Type, mod->Module_Name,startaddress+ le32_to_host(mod->Module_Location), le32_to_host(fmh->FMH_AllocatedSize),startaddress+ le32_to_host(fmh->FMH_Location), startaddress);
++		#if defined CONFIG_SPX_FEATURE_CONTIGIOUS_SPI_MEMORY
++            /* In case of contigious SPI need to get uboot size based on the image to boot
++             * so passing image to boot also to hrot_update() incase of contigious SPI */
++			image = imagetoboot;
++			retval = hrot_update(mod->Module_Type, mod->Module_Name,startaddress+ le32_to_host(mod->Module_Location), le32_to_host(fmh->FMH_AllocatedSize),startaddress+ le32_to_host(fmh->FMH_Location), startaddress, image);
++		#elif defined CONFIG_SPX_FEATURE_DEDICATED_SPI_FLASH_BANK
++		/* In case of dedicated SPI, SPI need to be selected based on image to boot
++		 * so passing image to boot also to hrot_update() incase of dedicated SPI */
++			image = imagetoboot;
++			retval = hrot_update(mod->Module_Type, mod->Module_Name, le32_to_host(mod->Module_Location), le32_to_host(fmh->FMH_AllocatedSize), le32_to_host(fmh->FMH_Location), startaddress, image);
+ 		#else
+ 			retval = hrot_update(mod->Module_Type, mod->Module_Name, le32_to_host(mod->Module_Location), le32_to_host(fmh->FMH_AllocatedSize), le32_to_host(fmh->FMH_Location), startaddress);
+ 		#endif		
+@@ -1425,13 +1430,12 @@
+ 	}	/* For Scan */
+ 
+ #ifdef CONFIG_SPX_FEATURE_SECURE_BOOT_SUPPORT
+-	#ifdef CONFIG_SPX_FEATURE_CONTIGIOUS_SPI_MEMORY
+-	if(imagetoboot == IMAGE_2)
+-	{
+-	    image=imagetoboot;
+-	    offset=CONFIG_SPX_FEATURE_GLOBAL_UBOOT_ENV_START-CONFIG_SPX_FEATURE_GLOBAL_ERASE_BLOCK_SIZE-256;
+-	    retval = hrot_finish(startaddress,offset,image);
+-	}
++	#if defined (CONFIG_SPX_FEATURE_DEDICATED_SPI_FLASH_BANK) || defined (CONFIG_SPX_FEATURE_CONTIGIOUS_SPI_MEMORY)
++		/*In case of dedicated SPI, SPI need to be selected based on image to boot
++		 * so passing image to boot also to hrot_finish() incase of dedicated SPI
++                * And in case of contigious SPI passing the image number to get the offset for boot FMH*/
++		image = imagetoboot;
++		retval = hrot_finish(startaddress, image);
+ 	#else
+ 		retval = hrot_finish(startaddress);
+ 	#endif
+diff -Naur uboot_old/oem/ami/fmh/fmhcore.c uboot_new/oem/ami/fmh/fmhcore.c
+--- uboot_old/oem/ami/fmh/fmhcore.c	2022-08-08 15:55:41.000000000 +0530
++++ uboot_new/oem/ami/fmh/fmhcore.c	2022-08-08 15:55:28.000000000 +0530
+@@ -207,7 +207,6 @@
+ 	fmh = CheckForNormalFMH(fmh);
+ 	if (fmh != NULL)
+ 		return fmh;
+-       
+ 
+ 	/* If Normal FMH is not found, check for alternate FMH */
+ 	//flash_read((ulong)SectorAddr+SectorSize - sizeof(ALT_FMH),sizeof(ALT_FMH),(char *)&altfmh_buffer);
+@@ -217,21 +216,25 @@
+         puts("Error in reading SPI\n");
+     }
+ 	altfmh = (ALT_FMH*)&altfmh_buffer;
+-	FMH_Offset = CheckForAlternateFMH(altfmh);
++	FMH_Offset = CheckForAlternateFMH(altfmh); // FMH_Offset contains the address of FMH is case of Alternate FMH
+ 	if (FMH_Offset == INVALID_FMH_OFFSET)
+ 		return NULL;
+ 	
+ #if defined CONFIG_SPX_FEATURE_DEDICATED_SPI_FLASH_BANK
+-	mod = &(fmh->Module_Info);
++	//mod = &(fmh->Module_Info);
+ 	for(i = 0; i < CONFIG_SPX_FEATURE_SECONDARY_IMAGE_SPI; i++)
+ 		SecStartAddr += CONFIG_SPX_FEATURE_GLOBAL_USED_FLASH_SIZE;
+ 		//SecStartAddr += flash_info[i].size;
+ 
+-       
++       /* The FMH_Offset contains the offset to the fmh in case of alternate FMH so adding
++        * it to SecStartAddr will point to FMH.*/
++       mod = (MODULE_INFO *) (SecStartAddr  + FMH_Offset);
++
+ 	if ((StartAddr - le32_to_host(mod->Module_Location)) >= SecStartAddr)
+ 	{
+ 		//flash_read((ulong)CONFIG_SYS_FLASH_BASE+SecStartAddr+FMH_Offset, sizeof(FMH),(char *)&fmh_buffer);
+-		ret=spi_flash_read(flash,le32_to_host(mod->Module_Location)+SecStartAddr+FMH_Offset, sizeof(FMH),(void *)&fmh_buffer);
++               /*Reading the FMH contents*/
++               ret=spi_flash_read(flash,SecStartAddr + FMH_Offset, sizeof(FMH),(void *)&fmh_buffer);
+ 		if(ret)
+ 		{
+ 			puts("Error in reading SPI\n");
+@@ -239,11 +242,12 @@
+ 	}	
+ 	else
+ #elif defined CONFIG_SPX_FEATURE_CONTIGIOUS_SPI_MEMORY
+-	mod = &(fmh->Module_Info);
++	//mod = &(fmh->Module_Info);
++       mod = (MODULE_INFO *) (CONFIG_SPX_FEATURE_GLOBAL_USED_FLASH_SIZE  + FMH_Offset);
+ 	if ((StartAddr - le32_to_host(mod->Module_Location)) >= CONFIG_SPX_FEATURE_GLOBAL_USED_FLASH_SIZE)
+ 	{
+ 		//flash_read((ulong)CONFIG_SYS_FLASH_BASE+CONFIG_SPX_FEATURE_GLOBAL_USED_FLASH_SIZE+FMH_Offset, sizeof(FMH), (char *)&fmh_buffer);
+-		ret=spi_flash_read(flash,le32_to_host(mod->Module_Location)+CONFIG_SPX_FEATURE_GLOBAL_USED_FLASH_SIZE+FMH_Offset, sizeof(FMH), (void *)&fmh_buffer);
++		ret=spi_flash_read(flash, CONFIG_SPX_FEATURE_GLOBAL_USED_FLASH_SIZE + FMH_Offset, sizeof(FMH), (void *)&fmh_buffer);
+ 		if(ret)
+ 		{
+ 			puts("Error in reading SPI\n");
+diff -Naur uboot_old/oem/ami/fmh/hrotcore.c uboot_new/oem/ami/fmh/hrotcore.c
+--- uboot_old/oem/ami/fmh/hrotcore.c	2022-08-08 15:55:41.000000000 +0530
++++ uboot_new/oem/ami/fmh/hrotcore.c	2022-08-05 16:28:44.000000000 +0530
+@@ -38,15 +38,28 @@
+ 	return;
+ }
+ 
++#if defined CONFIG_SPX_FEATURE_CONTIGIOUS_SPI_MEMORY || defined CONFIG_SPX_FEATURE_DEDICATED_SPI_FLASH_BANK
++int
++hrot_update(unsigned short ModType, void *ModName, UINT32 location, UINT32 AllocSize, UINT32 fmhLocation, unsigned long startaddress, int image){
++#else
+ int
+ hrot_update(unsigned short ModType, void *ModName, UINT32 location, UINT32 AllocSize, UINT32 fmhLocation, unsigned long startaddress){
+-
++#endif
+ 	int hs_size=HASH_BLK_SIZE;
+ 	UINT32 stopHash;
+         unsigned char *hash_data;
+         int rc = 0;
+ 	UINT32 hash_start, size_to_hash;
+ 	struct spi_flash *flash;
++#ifdef CONFIG_SPX_FEATURE_DEDICATED_SPI_FLASH_BANK
++	int flash_select = 0;
++	/* In case of Dedicated SPI - Select SPI based on the image to boot*/
++	/* If Image 1 - SPI0, else
++	 * If Image 2 - SPI1 */
++	if (image == 2){
++		flash_select = 1;
++	}
++#endif
+ 	if (0)
+ 	{
+ 		startaddress=startaddress;
+@@ -54,8 +67,13 @@
+ 	if((ModType == MODULE_BOOTLOADER) && (strncmp((char *)ModName,"boot",sizeof("boot")) == 0)){
+ 		boot_fmh_location = fmhLocation;
+ 	}
++#ifdef CONFIG_SPX_FEATURE_DEDICATED_SPI_FLASH_BANK
++	flash = spi_flash_probe(CONFIG_ENV_SPI_BUS, flash_select,
++                        CONFIG_ENV_SPI_MAX_HZ, CONFIG_ENV_SPI_MODE);
++#else
+ 	flash = spi_flash_probe(CONFIG_ENV_SPI_BUS, CONFIG_ENV_SPI_CS,
+                         CONFIG_ENV_SPI_MAX_HZ, CONFIG_ENV_SPI_MODE);
++#endif
+     if (flash == NULL) 
+     {
+         puts("\nspi_flash_probe failed");
+@@ -75,7 +93,18 @@
+                 }
+                 else{
+                         hash_start =  location;
+-                	size_to_hash = fmhLocation + SIZE_OF_UBOOT_FMH - PROD_SIG_OFFSET;
++#ifdef CONFIG_SPX_FEATURE_CONTIGIOUS_SPI_MEMORY
++                    if (2 == image) {
++                        /* Total size for uboot section to calculate hash = size of uboot + uboot fmh - signature
++                           size of uboot for second image = fmh location - used flash size */
++                        size_to_hash = fmhLocation - CONFIG_SPX_FEATURE_GLOBAL_USED_FLASH_SIZE  + SIZE_OF_UBOOT_FMH - PROD_SIG_OFFSET;
++                    }
++                    else {
++                        size_to_hash = fmhLocation + SIZE_OF_UBOOT_FMH - PROD_SIG_OFFSET;
++                    }
++#else
++                    size_to_hash = fmhLocation + SIZE_OF_UBOOT_FMH - PROD_SIG_OFFSET;
++#endif
+                 }
+ 
+ 		stopHash = (size_to_hash+hash_start);
+@@ -117,18 +146,32 @@
+ #define FWIMG_IDENTIFIER "$fwimg$"
+ #define END_IDENTIFIER   "$end$"
+ 
+-#ifdef CONFIG_SPX_FEATURE_CONTIGIOUS_SPI_MEMORY
+-        int hrot_finish(unsigned long startaddress, int offset,int image){
+-#else	
++#if defined (CONFIG_SPX_FEATURE_CONTIGIOUS_SPI_MEMORY) || defined (CONFIG_SPX_FEATURE_DEDICATED_SPI_FLASH_BANK)
++	int hrot_finish(unsigned long startaddress, int image){
++#else
+ 	int hrot_finish(unsigned long startaddress){
+ #endif
+         unsigned char output [65];
++#ifdef CONFIG_SPX_FEATURE_DEDICATED_SPI_FLASH_BANK
++	int flash_select = 0;
++#endif
++
+ #ifdef CONFIG_SPX_FEATURE_CONTIGIOUS_SPI_MEMORY
+ 	if(image==2){
+-	        boot_fmh_location = offset;
++	        boot_fmh_location = CONFIG_SPX_FEATURE_GLOBAL_USED_FLASH_SIZE  + boot_fmh_location;
++	}
++#endif
++
++#ifdef CONFIG_SPX_FEATURE_DEDICATED_SPI_FLASH_BANK
++	/*In case of Dedicated SPI - Select SPI based on the image to boot*/
++	/* If Image 1 - SPI0, else
++	 * If Image 2 - SPI1 */
++	if (2 == image) {
++		flash_select = 1;
+ 	}
+ #endif
+-        UINT32 keyInfo = boot_fmh_location - KEY_INFO_LENGTH;
++
++	UINT32 keyInfo = boot_fmh_location - KEY_INFO_LENGTH;
+         UINT32 sigaddr = product_info_offset  - PROD_SIG_OFFSET;
+         int rc = 0;
+         int size = 64;
+@@ -147,8 +190,13 @@
+ 		{
+ 			startaddress=startaddress;
+ 		}
+-		flash = spi_flash_probe(CONFIG_ENV_SPI_BUS, CONFIG_ENV_SPI_CS,
++#ifdef CONFIG_SPX_FEATURE_DEDICATED_SPI_FLASH_BANK
++	flash = spi_flash_probe(CONFIG_ENV_SPI_BUS, flash_select,
++							CONFIG_ENV_SPI_MAX_HZ, CONFIG_ENV_SPI_MODE);
++#else
++	flash = spi_flash_probe(CONFIG_ENV_SPI_BUS, CONFIG_ENV_SPI_CS,
+ 							CONFIG_ENV_SPI_MAX_HZ, CONFIG_ENV_SPI_MODE);
++#endif
+ 		if (flash == NULL) 
+ 		{
+ 			puts("\nspi_flash_probe failed");
+diff -Naur uboot_old/oem/ami/fmh/hrot_ifc.h uboot_new/oem/ami/fmh/hrot_ifc.h
+--- uboot_old/oem/ami/fmh/hrot_ifc.h	2022-08-08 15:55:41.000000000 +0530
++++ uboot_new/oem/ami/fmh/hrot_ifc.h	2022-08-05 16:28:44.000000000 +0530
+@@ -4,9 +4,13 @@
+ 
+ typedef unsigned long   UINT32;
+ void hrot_start(void);
+-int hrot_update(unsigned short ModType, void *ModName, UINT32 location, UINT32 ModSize, UINT32 fmhLocation, unsigned long startaddress);
+-#ifdef CONFIG_SPX_FEATURE_CONTIGIOUS_SPI_MEMORY
+-	int hrot_finish(unsigned long startaddress, int offset,int image);
++#if defined (CONFIG_SPX_FEATURE_DEDICATED_SPI_FLASH_BANK) || defined (CONFIG_SPX_FEATURE_CONTIGIOUS_SPI_MEMORY)
++	int hrot_update(unsigned short ModType, void *ModName, UINT32 location, UINT32 ModSize, UINT32 fmhLocation, unsigned long startaddress, int image);
++#else
++	int hrot_update(unsigned short ModType, void *ModName, UINT32 location, UINT32 ModSize, UINT32 fmhLocation, unsigned long startaddress);
++#endif
++#if defined (CONFIG_SPX_FEATURE_DEDICATED_SPI_FLASH_BANK) || defined (CONFIG_SPX_FEATURE_CONTIGIOUS_SPI_MEMORY)
++	int hrot_finish(unsigned long startaddress, int image);
+ #else
+ 	int hrot_finish(unsigned long startaddress);
+ #endif

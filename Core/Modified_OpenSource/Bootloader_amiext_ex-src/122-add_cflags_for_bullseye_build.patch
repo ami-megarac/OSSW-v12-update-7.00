@@ -1,0 +1,11 @@
+diff -Naur uboot_org/config.mk uboot/config.mk
+--- uboot_org/config.mk	2023-04-06 11:27:59.024339054 +0800
++++ uboot/config.mk	2023-04-06 11:29:35.599371135 +0800
+@@ -66,6 +66,7 @@
+ #########################################################################
+ 
+ HOSTCFLAGS	= -Wall -Wstrict-prototypes -O2 -fomit-frame-pointer \
++		  -Wno-address-of-packed-member \
+ 		  $(HOSTCPPFLAGS)
+ HOSTSTRIP	= strip
+ 

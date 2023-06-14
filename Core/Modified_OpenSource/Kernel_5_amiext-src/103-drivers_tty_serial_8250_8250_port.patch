@@ -1,0 +1,15 @@
+--- linux_ori/drivers/tty/serial/8250/8250_port.c	2021-10-20 17:40:18.000000000 +0800
++++ linux/drivers/tty/serial/8250/8250_port.c	2022-06-14 14:23:06.129908789 +0800
+@@ -1851,8 +1851,11 @@
+ 	}
+ 	serial8250_modem_status(up);
+ 	if ((!up->dma || up->dma->tx_err) && (status & UART_LSR_THRE) &&
+-		(up->ier & UART_IER_THRI))
++		(up->ier & UART_IER_THRI)){
++        uint8_t dummy = serial_port_in(port, UART_IIR);
++        (void)(dummy);
+ 		serial8250_tx_chars(up);
++    }
+ 
+ 	uart_unlock_and_check_sysrq(port, flags);
+ 	return 1;

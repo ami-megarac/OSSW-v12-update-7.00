@@ -1,0 +1,117 @@
+diff -Naur busybox_ori/networking/ifupdown.c busybox/networking/ifupdown.c
+--- busybox_ori/networking/ifupdown.c	2023-02-20 16:05:46.486908425 +0800
++++ busybox/networking/ifupdown.c	2023-02-20 16:03:30.195165594 +0800
+@@ -140,6 +140,7 @@
+ 	"post-down\0"
+ ;
+ 
++static char iface_family[16] = { 0 };
+ 
+ #if ENABLE_FEATURE_IFUPDOWN_IPV4 || ENABLE_FEATURE_IFUPDOWN_IPV6
+ 
+@@ -404,16 +405,27 @@
+ 	result += execute("ifconfig %iface% add %address%/%netmask%", ifd, exec);
+ 	result += execute("[[route -A inet6 add ::/0 gw %gateway%[[ metric %metric%]] %iface%]]", ifd, exec);
+ # endif
+-	return ((result == 3) ? 3 : 0);
++	// Prevent interface not up when no Ipv6 address provide in static mode via launching ipmi command
++	if (strncmp(iface_family, ifd->address_family->name,sizeof(iface_family)) == 0) {
++		return ((result > 0) ? result : 0);
++	} // if
++	else {
++		return ((result == 3) ? 3 : 0);
++	} // else
+ }
+ 
+ static int FAST_FUNC static_down6(struct interface_defn_t *ifd, execfn *exec)
+ {
++	int result = 0;
+ # if ENABLE_FEATURE_IFUPDOWN_IP
+-	return execute("ip link set %iface% down", ifd, exec);
++	result = execute("ip link set %iface% down", ifd, exec);
++	return result;
+ # else
+-	return execute("ifconfig %iface% down", ifd, exec);
++	result = execute("ip -f inet6 addr flush dev %iface%", ifd, exec);
++	result += execute("[[route -A inet6 del ::/0 gw %gateway%[[ metric %metric%]] %iface%]]", ifd, exec);
++	result += execute("ifconfig %iface% down", ifd, exec);
+ # endif
++	return result;
+ }
+ 
+ 
+@@ -439,7 +451,8 @@
+ # if ENABLE_FEATURE_IFUPDOWN_IP
+ 	result= execute("ip link set %iface% down", ifd, exec);
+ # else
+-	result= execute("ifconfig %iface% down", ifd, exec);
++	result = execute("ip -f inet6 addr flush dev %iface%", ifd, exec);
++	result += execute("ifconfig %iface% down", ifd, exec);
+ # endif
+    return (result);
+ }
+@@ -543,7 +556,7 @@
+ 	/* result = execute("[[route del default gw %gateway% %iface%]]", ifd, exec); */
+ 	/* Bringing the interface down deletes the routes in itself.
+ 	   Otherwise this fails if we reference 'gateway' when using this from dhcp_down */
+-	result = execute("ifconfig %iface% 0.0.0.0", ifd, exec);
++	result = execute("ip -f inet addr flush dev %iface%", ifd, exec);
+     result += execute("ifconfig %iface% down", ifd, exec);
+ # endif
+ 	return ((result == 2) ? 2 : 0);
+@@ -1226,6 +1239,7 @@
+ 	llist_t *target_list = NULL;
+ 	const char *interfaces = "/etc/network/interfaces";
+ 	bool any_failures = 0;
++	FILE *fp = NULL;
+ 
+ 	INIT_G();
+ 
+@@ -1238,6 +1252,21 @@
+ 		cmds = iface_up;
+ 	}
+ 
++	memset(iface_family, 0, sizeof(iface_family));
++	fp = fopen("/tmp/iface_family", "r+");
++	if (fp== NULL) {
++		debug_noise("Use default\n");
++	} // if
++	else {
++		if(fread(iface_family,sizeof(iface_family),1,fp)) {
++			debug_noise("Cannot open file. Use default\n");
++			memset(iface_family, 0, sizeof(iface_family));
++		} // if
++
++		fclose(fp);
++		fp = NULL;
++	} // else
++
+ 	getopt32(argv, OPTION_STR, &interfaces);
+ 	argv += optind;
+ 	if (argv[0]) {
+@@ -1320,7 +1349,8 @@
+ 		iface_list = defn->ifaces;
+ 		while (iface_list) {
+ 			currif = (struct interface_defn_t *) iface_list->data;
+-			if (strcmp(liface, currif->iface) == 0) {
++			if ((strcmp(liface, currif->iface) == 0 && ( strlen(iface_family) > 0 && strncmp(iface_family, currif->address_family->name,sizeof(iface_family)) == 0 ))
++				|| (strcmp(liface, currif->iface) == 0 && strlen(iface_family) == 0)) {
+ 				char *oldiface = currif->iface;
+ 
+ 				okay = 1;
+diff -Naur busybox_ori/networking/udhcp/dhcpc.c busybox/networking/udhcp/dhcpc.c
+--- busybox_ori/networking/udhcp/dhcpc.c	2023-02-20 16:06:03.022254831 +0800
++++ busybox/networking/udhcp/dhcpc.c	2023-02-20 16:03:48.265683082 +0800
+@@ -1061,7 +1061,11 @@
+ 	sock.sll_family = AF_PACKET;
+ 	sock.sll_protocol = htons(ETH_P_IP);
+ 	sock.sll_ifindex = ifindex;
+-	xbind(fd, (struct sockaddr *) &sock, sizeof(sock));
++	// xbind(fd, (struct sockaddr *) &sock, sizeof(sock));
++	if (bind(fd, (struct sockaddr *) &sock, sizeof(sock)) < 0) {
++		log1("bind fails. errno = %u\n",errno ); //log2?
++		return -1;
++	} // if
+ 
+ 	if (CLIENT_PORT == 68) {
+ 		/* Use only if standard port is in use */

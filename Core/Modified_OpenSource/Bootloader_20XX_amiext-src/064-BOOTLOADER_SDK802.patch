@@ -1,0 +1,22 @@
+--- uboot/tools/imx8image.c	2019-07-23 10:57:54.000000000 +0800
++++ uboot-new/tools/imx8image.c	2022-07-28 13:49:17.438014560 +0800
+@@ -364,7 +364,7 @@
+ 	struct stat sbuf;
+ 	unsigned char *ptr;
+ 	int tail;
+-	int zero = 0;
++	uint64_t zero = 0;
+ 	uint8_t zeros[4096];
+ 	int size, ret;
+ 
+--- uboot/tools/imx8mimage.c	2019-07-23 10:57:54.000000000 +0800
++++ uboot-new/tools/imx8mimage.c	2022-07-28 13:49:46.038375644 +0800
+@@ -227,7 +227,7 @@
+ 	struct stat sbuf;
+ 	unsigned char *ptr;
+ 	int tail;
+-	int zero = 0;
++	uint64_t zero = 0;
+ 	uint8_t zeros[4096];
+ 	int size, ret;
+ 

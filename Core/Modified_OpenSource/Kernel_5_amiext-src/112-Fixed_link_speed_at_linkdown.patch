@@ -1,0 +1,33 @@
+diff -Naur linux_org/drivers/net/phy/phy_device.c linux/drivers/net/phy/phy_device.c
+--- linux_org/drivers/net/phy/phy_device.c	2022-09-21 10:50:17.776353000 +0800
++++ linux/drivers/net/phy/phy_device.c	2022-09-23 16:17:04.691826638 +0800
+@@ -1853,7 +1853,7 @@
+  */
+ int genphy_read_status(struct phy_device *phydev)
+ {
+-	int err, old_link = phydev->link;
++	int err, old_link = phydev->link, bmsr;
+ 
+ 	/* Update the link, but return if there was an error */
+ 	err = genphy_update_link(phydev);
+@@ -1874,6 +1874,20 @@
+ 		return err;
+ 	}
+ 
++	bmsr = phy_read(phydev, MII_BMSR);
++	if (bmsr < 0) {
++		phydev->speed = SPEED_UNKNOWN;
++		phydev->duplex = DUPLEX_UNKNOWN;
++		return err;
++	}else
++	{
++		if(!(bmsr & BMSR_LSTATUS))
++		{
++			phydev->speed = 0;
++			phydev->duplex = 0;
++		}
++	}
++
+ 	if (phydev->autoneg == AUTONEG_ENABLE && phydev->autoneg_complete) {
+ 		phy_resolve_aneg_linkmode(phydev);
+ 	} else if (phydev->autoneg == AUTONEG_DISABLE) {

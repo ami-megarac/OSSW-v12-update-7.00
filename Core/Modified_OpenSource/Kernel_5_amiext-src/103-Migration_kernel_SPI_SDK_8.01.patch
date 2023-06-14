@@ -1,0 +1,81 @@
+--- linux_old/drivers/spi/spi.c	2021-10-20 09:40:18.000000000 +0000
++++ linux/drivers/spi/spi.c	2022-06-21 07:03:25.446603315 +0000
+@@ -47,6 +47,10 @@
+ {
+ 	struct spi_device	*spi = to_spi_device(dev);
+ 
++	/* spi controllers may cleanup for released devices */
++	if (spi->controller->cleanup)
++		spi->controller->cleanup(spi);
++
+ 	spi_controller_put(spi->controller);
+ 	kfree(spi->driver_override);
+ 	kfree(spi);
+@@ -545,12 +549,6 @@
+ 	return 0;
+ }
+ 
+-static void spi_cleanup(struct spi_device *spi)
+-{
+-	if (spi->controller->cleanup)
+-		spi->controller->cleanup(spi);
+-}
+-
+ /**
+  * spi_add_device - Add spi_device allocated with spi_alloc_device
+  * @spi: spi_device to register
+@@ -615,13 +613,11 @@
+ 
+ 	/* Device may be bound to an active driver when this returns */
+ 	status = device_add(&spi->dev);
+-	if (status < 0) {
++	if (status < 0)
+ 		dev_err(dev, "can't add %s, status %d\n",
+ 				dev_name(&spi->dev), status);
+-		spi_cleanup(spi);
+-	} else {
++	else
+ 		dev_dbg(dev, "registered child %s\n", dev_name(&spi->dev));
+-	}
+ 
+ done:
+ 	mutex_unlock(&spi_add_lock);
+@@ -714,9 +710,7 @@
+ 	}
+ 	if (ACPI_COMPANION(&spi->dev))
+ 		acpi_device_clear_enumerated(ACPI_COMPANION(&spi->dev));
+-	device_del(&spi->dev);
+-	spi_cleanup(spi);
+-	put_device(&spi->dev);
++	device_unregister(&spi->dev);
+ }
+ EXPORT_SYMBOL_GPL(spi_unregister_device);
+ 
+@@ -1849,7 +1843,6 @@
+ 	/* Store a pointer to the node in the device structure */
+ 	of_node_get(nc);
+ 	spi->dev.of_node = nc;
+-	spi->dev.fwnode = of_fwnode_handle(nc);
+ 
+ 	/* Register the new device */
+ 	rc = spi_add_device(spi);
+--- linux_old/drivers/mtd/spi-nor/spi-nor.c	2022-06-23 06:27:38.255818912 +0000
++++ linux/drivers/mtd/spi-nor/spi-nor.c	2022-06-23 08:33:39.686736777 +0000
+@@ -2435,7 +2435,7 @@
+ 			 SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+ 	{ "mx25l25655e", INFO(0xc22619, 0, 64 * 1024, 512, 0) },
+ 	{ "mx66l51235l", INFO(0xc2201a, 0, 64 * 1024, 1024, SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_4B_OPCODES) },
+-	{ "mx66u51235f", INFO(0xc2253a, 0, 64 * 1024, 1024, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_4B_OPCODES) },
++	{ "mx25u51245g", INFO(0xc2253a, 0, 64 * 1024, 1024, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_4B_OPCODES) },
+ 	{ "mx66l1g45g",  INFO(0xc2201b, 0, 64 * 1024, 2048, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+ 	{ "mx66l1g55g",  INFO(0xc2261b, 0, 64 * 1024, 2048, SPI_NOR_QUAD_READ) },
+ 	{ "mx66l2g45g",  INFO(0xc2201c, 0, 64 * 1024, 4096, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+@@ -2449,7 +2449,7 @@
+ 	{ "n25q128a11",  INFO(0x20bb18, 0, 64 * 1024,  256, SECT_4K | SPI_NOR_QUAD_READ) },
+ 	{ "n25q128a13",  INFO(0x20ba18, 0, 64 * 1024,  256, SECT_4K | SPI_NOR_QUAD_READ) },
+ 	{ "n25q256a",    INFO(0x20ba19, 0, 64 * 1024,  512, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+-	{ "n25q256ax1",  INFO(0x20bb19, 0, 64 * 1024,  512, SECT_4K | SPI_NOR_QUAD_READ) },
++	{ "mt25qu256aba",  INFO(0x20bb19, 0, 64 * 1024,  512, SECT_4K | SPI_NOR_QUAD_READ) },
+ 	{ "n25q512ax3",  INFO(0x20ba20, 0, 64 * 1024, 1024, SECT_4K | USE_FSR | SPI_NOR_QUAD_READ) },
+ 	{ "mt25qu512a",  INFO6(0x20bb20, 0x104400, 64 * 1024, 1024,
+ 			       SECT_4K | USE_FSR | SPI_NOR_DUAL_READ |
