@@ -1,0 +1,125 @@
+diff -Naur uboot_orig/arch/arm/cpu/pilotcommon/wdt.c uboot/arch/arm/cpu/pilotcommon/wdt.c
+--- uboot_orig/arch/arm/cpu/pilotcommon/wdt.c	2022-08-10 17:25:40.006257127 +0530
++++ uboot/arch/arm/cpu/pilotcommon/wdt.c	2022-08-10 17:26:37.849646168 +0530
+@@ -53,7 +53,7 @@
+     (*((volatile unsigned long *)(SYS_WDT1_CONF_REG))) |= WDT_MAX_TIMEOUT;
+ 
+     /*set arm processor and SPI controllor routines to reset*/
+-    (*((volatile unsigned long *)(SYS_WDT1_RESET_ENABLE_LOW_REG))) = (BOOTSPI_INTERFACE_MASK || ARM_CPU_MASK);
++    (*((volatile unsigned long *)(SYS_WDT1_RESET_ENABLE_LOW_REG))) = (BOOTSPI_INTERFACE_MASK | ARM_CPU_MASK);
+ 
+ 
+     /* Enable watch dog */
+diff -Naur uboot_orig/common/cmd_flash.c uboot/common/cmd_flash.c
+--- uboot_orig/common/cmd_flash.c	2022-08-10 17:25:40.106248637 +0530
++++ uboot/common/cmd_flash.c	2022-08-10 17:27:07.999471636 +0530
+@@ -45,7 +45,7 @@
+ #include <flash.h>
+ #include <mtd/cfi_flash.h>
+ extern flash_info_t flash_info[];	/* info for FLASH chips */
+-
++extern int Disable_watchdog(void);
+ /*
+  * The user interface starts numbering for Flash banks with 1
+  * for historical reasons.
+@@ -413,6 +413,10 @@
+ 	if (addr_first >= addr_last)
+ 		return CMD_RET_USAGE;
+ 
++#ifndef CONFIG_SPX_FEATURE_GLOBAL_DUAL_IMAGE_SUPPORT
++		Disable_watchdog();
++#endif
++
+ 	rcode = flash_sect_erase(addr_first, addr_last);
+ 	return rcode;
+ #else
+diff -Naur uboot_orig/common/main.c uboot/common/main.c
+--- uboot_orig/common/main.c	2022-08-10 17:25:40.110248297 +0530
++++ uboot/common/main.c	2022-08-10 17:27:47.292854257 +0530
+@@ -1184,7 +1184,9 @@
+ 	char	c;
+ 
+ 	// disable all watchdog
++#ifdef CONFIG_SPX_FEATURE_GLOBAL_DUAL_IMAGE_SUPPORT
+ 	Disable_watchdog();
++#endif
+ 	/* print prompt */
+ 	if (prompt) {
+ 		plen = strlen (prompt);
+diff -Naur uboot_orig/oem/ami/fmh/cmd_fmh.c uboot/oem/ami/fmh/cmd_fmh.c
+--- uboot_orig/oem/ami/fmh/cmd_fmh.c	2022-08-10 17:25:40.162243882 +0530
++++ uboot/oem/ami/fmh/cmd_fmh.c	2022-08-12 20:35:18.090330100 +0530
+@@ -37,6 +37,8 @@
+ #define IMG1_index_val  0
+ #define IMG2_index_val  1
+ 
++#define SYS_WDT_RST_STATUS_REG_SCRACHPAD 0x4010027C // since P4 is not able to retrieve the SYS_WDT_RST_STATUS_REG values, a work around has been implemented to store it in scratchpad.
++
+ typedef struct
+ {
+     u8 major_ver;
+@@ -699,10 +701,11 @@
+ #ifdef CONFIG_SPX_FEATURE_BMC_FIRMWARE_AUTO_RECOVERY
+ void BMCAutoRecovery (void)
+ {
+-    char *pStr;
++    char *pStr=NULL, *gsEnv=NULL, *gsEnv2=NULL;
+     char value[2] = {0};
+-    u8 force_recovery = 0, imgheadererr = 0, bootretry = 1, currentbootretry = 0;
+-
++    u8 force_recovery = 0, imgheadererr = 0, bootretry = CONFIG_SPX_FEATURE_BMC_FIRMWARE_REBOOT_RETRY_COUNT, currentbootretry = 0;
++    unsigned long wdt2TimeoutStatus = 0;
++    
+     /*Check whether force recovery image boot is triggered.*/
+     pStr= getenv("forcerecovery");
+     if ((pStr!= NULL ) && (strcmp(pStr,"yes") == 0))
+@@ -731,10 +734,16 @@
+         currentbootretry = (int)simple_strtoul(pStr,NULL,0);
+     }
+ 
+-    currentbootretry++;
+-    sprintf(value,"%d",currentbootretry);
+-    setenv("currentbootretry",(char *)value);
+-    saveenv();
++    wdt2TimeoutStatus = (((*((volatile unsigned long *)(SYS_WDT_RST_STATUS_REG_SCRACHPAD))) ) & 0x00000001);
++    // Increment the currentbootretry, if reboot happens on watchdog.
++    if(wdt2TimeoutStatus)
++    {
++	currentbootretry++;
++	sprintf(value,"%d",currentbootretry);
++	setenv("currentbootretry",(char *)value);
++	saveenv();
++	wdt2TimeoutStatus = 0;
++    }
+ 
+     if(force_recovery || imgheadererr || (currentbootretry > bootretry) )
+     {
+@@ -761,6 +770,8 @@
+     else
+     {
+         Enable_watchdog(&g_wdt_reset_status);
++
++        gsEnv = getenv("goldenside");
+         if (g_wdt_reset_status & 0x00000002)
+         {
+             setenv("goldenside", "1");
+@@ -769,9 +780,16 @@
+         {
+             setenv("goldenside", "0");
+         }
+-
+-        saveenv();
+-
++        gsEnv2 = getenv("goldenside");
++        
++	if((gsEnv == NULL) || (gsEnv2 == NULL))
++	{
++		saveenv();
++	}
++	else if(strcmp(gsEnv,gsEnv2) != 0)
++	{
++		saveenv();
++	}
+     }
+ 
+ }
